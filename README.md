@@ -128,6 +128,23 @@ var server = new Pretender(function(){
 });
 ```
 
+Or, optionally, return a Promise.
+
+```javascript
+var server = new Pretender(function() {
+  this.get('/api/songs', function(request) {
+    return new Promise(function(resolve) {
+      var response = [
+        200,
+        {'content-type': 'application/javascript'},
+        '[{"id": 12}, {"id": 14}]'
+      ];
+      resolve(response);
+    });
+  });
+});
+```
+
 ### Pass-Through
 You can specify paths that should be ignored by pretender and made as real XHR requests.
 Enable these by specifying pass-through routes with `pretender.passthrough`:
@@ -315,7 +332,7 @@ this.get('/api/songs', function(request){
 This can become tiresome if you know, for example, that all your responses are
 going to be JSON. The body of a response will be passed through a
 `prepareBody` hook before being passed to the fake response object.
-`prepareBody` defaults to an empty function, but can be overriden:
+`prepareBody` defaults to an empty function, but can be overridden:
 
 ```javascript
 var server = new Pretender(function(){
@@ -349,10 +366,24 @@ server.prepareHeaders = function(headers){
 ## Tracking Requests
 Your pretender instance will track handlers and requests on a few array properties.
 All handlers are stored on `handlers` property and incoming requests will be tracked in one of
-two properties: `handledRequests` and `unhandledRequests`. This is useful if you want to build
-testing infrastructure on top of pretender and need to fail tests that have handlers without requests.
+two properties: `handledRequests` and `unhandledRequests`. The handler is also returned from
+any verb function. This is useful if you want to build testing infrastructure on top of
+pretender and need to fail tests that have handlers without requests.
 
 Each handler keeps a count of the number of requests is successfully served.
+
+```javascript
+server.get(/* ... */);
+var handler = server.handlers[0];
+
+// or
+
+var handler = server.get(/* ... */);
+
+// then
+
+var numberOfCalls = handler.numberOfCalls;
+```
 
 ## Clean up
 When you're done mocking, be sure to call `shutdown()` to restore the native XMLHttpRequest object:

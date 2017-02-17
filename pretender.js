@@ -29,8 +29,30 @@ function parseURL(url) {
   // TODO: something for when document isn't present... #yolo
   var anchor = document.createElement('a');
   anchor.href = url;
-  anchor.fullpath = anchor.pathname + (anchor.search || '') + (anchor.hash || '');
-  return anchor;
+
+  if (!anchor.host) {
+    anchor.href = anchor.href; // IE: load the host and protocol
+  }
+
+  var pathname = anchor.pathname;
+  if (pathname.charAt(0) !== '/') {
+    pathname = '/' + pathname; // IE: prepend leading slash
+  }
+
+  var host = anchor.host;
+  if (anchor.port === '80' || anchor.port === '443') {
+    host = anchor.hostname; // IE: remove default port
+  }
+
+  return {
+    host: host,
+    protocol: anchor.protocol,
+    search: anchor.search,
+    hash: anchor.hash,
+    href: anchor.href,
+    pathname: pathname,
+    fullpath: pathname + (anchor.search || '') + (anchor.hash || '')
+  };
 }
 
 
@@ -99,7 +121,7 @@ function Pretender(/* routeMap1, routeMap2, ...*/) {
 
   // capture xhr requests, channeling them into
   // the route map.
-  self.XMLHttpRequest = interceptor(this);
+  self.XMLHttpRequest = interceptor(this, this._nativeXMLHttpRequest);
 
   // 'start' the server
   this.running = true;
@@ -110,7 +132,7 @@ function Pretender(/* routeMap1, routeMap2, ...*/) {
   }
 }
 
-function interceptor(pretender) {
+function interceptor(pretender, nativeRequest) {
   function FakeRequest() {
     // super()
     FakeXMLHttpRequest.call(this);
@@ -139,7 +161,7 @@ function interceptor(pretender) {
     var evts = ['error', 'timeout', 'abort', 'readystatechange'];
 
     // event types to handle on the xhr.upload
-    var uploadEvents = ['progress'];
+    var uploadEvents = [];
 
     // properties to copy from the native xhr to fake xhr
     var lifecycleProps = ['readyState', 'responseText', 'responseXML', 'status', 'statusText'];
@@ -151,14 +173,16 @@ function interceptor(pretender) {
       xhr.responseType = fakeXHR.responseType;
     }
 
-    // Use onload if the browser supports it
+    // use onload if the browser supports it
     if ('onload' in xhr) {
       evts.push('load');
     }
 
     // add progress event for async calls
+    // avoid using progress events for sync calls, they will hang https://bugs.webkit.org/show_bug.cgi?id=40996.
     if (fakeXHR.async && fakeXHR.responseType !== 'arraybuffer' && fakeXHR.responseType !== 'blob') {
       evts.push('progress');
+      uploadEvents.push('progress');
     }
 
     // update `propertyNames` properties from `fromXHR` to `toXHR`
@@ -237,12 +261,19 @@ function interceptor(pretender) {
   };
 
   FakeRequest.prototype = proto;
+
+  if (nativeRequest.prototype._passthroughCheck) {
+    console.warn('You created a second Pretender instance while there was already one running. ' +
+          'Running two Pretender servers at once will lead to unexpected results and will ' +
+          'be removed entirely in a future major version.' +
+          'Please call .shutdown() on your instances when you no longer need them to respond.');
+  }
   return FakeRequest;
 }
 
 function verbify(verb) {
   return function(path, handler, async) {
-    this.register(verb, path, handler, async);
+    return this.register(verb, path, handler, async);
   };
 }
 
@@ -270,6 +301,7 @@ Pretender.prototype = {
   'delete': verbify('DELETE'),
   patch: verbify('PATCH'),
   head: verbify('HEAD'),
+  options: verbify('OPTIONS'),
   map: function(maps) {
     maps.call(this);
   },
@@ -289,6 +321,8 @@ Pretender.prototype = {
       path: parseURL(url).fullpath,
       handler: handler
     }]);
+
+    return handler;
   },
   passthrough: PASSTHROUGH,
   checkPassthrough: function checkPassthrough(request) {
@@ -319,22 +353,34 @@ Pretender.prototype = {
       var async = handler.handler.async;
       this.handledRequests.push(request);
 
-      try {
-        var statusHeadersAndBody = handler.handler(request);
+      var pretender = this;
+
+      var _handleRequest = function(statusHeadersAndBody) {
         if (!isArray(statusHeadersAndBody)) {
           var note = 'Remember to `return [status, headers, body];` in your route handler.';
           throw new Error('Nothing returned by handler for ' + path + '. ' + note);
         }
 
         var status = statusHeadersAndBody[0],
-            headers = this.prepareHeaders(statusHeadersAndBody[1]),
-            body = this.prepareBody(statusHeadersAndBody[2], headers),
-            pretender = this;
+            headers = pretender.prepareHeaders(statusHeadersAndBody[1]),
+            body = pretender.prepareBody(statusHeadersAndBody[2], headers);
 
-        this.handleResponse(request, async, function() {
+        pretender.handleResponse(request, async, function() {
           request.respond(status, headers, body);
           pretender.handledRequest(verb, path, request);
         });
+      };
+
+      try {
+        var result = handler.handler(request);
+        if (result && typeof result.then === 'function') {
+          // `result` is a promise, resolve it
+          result.then(function(resolvedResult) {
+            _handleRequest(resolvedResult);
+          });
+        } else {
+          _handleRequest(result);
+        }
       } catch (error) {
         this.erroredRequest(verb, path, request, error);
         this.resolve(request);

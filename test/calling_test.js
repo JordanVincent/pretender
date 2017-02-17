@@ -35,6 +35,52 @@ describe('pretender invoking', function(config) {
     ok(wasCalled);
   });
 
+  it('clobbering duplicate mapping works', function() {
+    var wasCalled, wasCalled2;
+    function map() {
+      this.get('/some/path', function() {
+        wasCalled = true;
+      });
+    }
+    function map2() {
+      this.get('/some/path', function() {
+        wasCalled2 = true;
+      });
+    }
+
+    this.pretender.map(map);
+    this.pretender.map(map2);
+
+    $.ajax({url: '/some/path'});
+
+    ok(!wasCalled);
+    ok(wasCalled2);
+  });
+
+  it('ordered duplicate mapping works', function() {
+    var wasCalled, wasCalled2;
+    function map() {
+      this.get('/some/path', function() {
+        wasCalled = true;
+      });
+    }
+
+    this.pretender.map(map);
+    $.ajax({url: '/some/path'});
+
+    function map2() {
+      this.get('/some/path', function() {
+        wasCalled2 = true;
+      });
+    }
+
+    this.pretender.map(map2);
+    $.ajax({url: '/some/path'});
+
+    ok(wasCalled);
+    ok(wasCalled2);
+  });
+
   it('params are passed', function() {
     var params;
     this.pretender.get('/some/path/:id', function(request) {
@@ -457,6 +503,29 @@ describe('pretender invoking', function(config) {
 
     $.ajax({url: url});
     ok(wasCalled);
+  });
+
+  it('accepts a handler that returns a promise', function(assert) {
+    var done = assert.async();
+
+    var json = '{foo: "bar"}';
+
+    this.pretender.get('/some/path', function(req) {
+      return new Promise(function(resolve) {
+        resolve([200, {}, json]);
+      });
+    });
+
+    this.pretender.handledRequest = function(verb, path, request) {
+      ok(true, 'handledRequest hook was called');
+      equal(verb, 'GET');
+      equal(path, '/some/path');
+      equal(request.responseText, json);
+      equal(request.status, '200');
+      done();
+    };
+
+    $.ajax({url: '/some/path'});
   });
 });
 
